@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tool Luyện Nghe Song Ngữ Pro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 650px; margin: 20px auto; padding: 20px; line-height: 1.6; background-color: #f9f9f9; }
+        .upload-box { border: 2px dashed #007bff; padding: 15px; text-align: center; border-radius: 8px; margin-bottom: 15px; background-color: #ffffff; }
+        input[type="file"] { display: none; }
+        .custom-file-upload { display: inline-block; padding: 10px 20px; cursor: pointer; background-color: #007bff; color: white; border-radius: 5px; font-weight: bold; }
+        
+        .file-list { margin-top: 15px; background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .file-list h3 { margin-top: 0; font-size: 16px; color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px;}
+        .file-item { display: flex; justify-content: space-between; align-items: center; background: #f1f8ff; padding: 12px; margin-bottom: 8px; border-radius: 5px; cursor: pointer; border: 1px solid transparent; transition: 0.2s;}
+        .file-item:hover { background: #e2eff9; }
+        .file-item.active { background: #d1ecf1; border: 1px solid #17a2b8; font-weight: bold; }
+        .file-item span { flex: 1; }
+        
+        textarea { width: 100%; height: 200px; padding: 12px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; margin-top: 15px; }
+        .controls { margin-top: 15px; display: flex; gap: 10px; }
+        button { flex: 1; padding: 15px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; color: white; font-weight: bold; }
+        .btn-play { background-color: #28a745; }
+        .btn-stop { background-color: #dc3545; }
+        .btn-del { flex: none; background-color: #ff4444; padding: 6px 12px; font-size: 13px; margin-left: 10px;}
+        #status { margin-top: 15px; font-weight: bold; color: #555; text-align: center; font-size: 16px;}
+    </style>
+</head>
+<body>
+
+    <h2 style="text-align: center;">🎧 Tool Học Tiếng Anh (Lưu Vĩnh Viễn)</h2>
+    
+    <div class="upload-box">
+        <label for="fileInput" class="custom-file-upload">📂 Tải lên File Excel bài học mới</label>
+        <input type="file" id="fileInput" accept=".xlsx, .xls" />
+    </div>
+
+    <!-- Danh sách các bài đã nạp -->
+    <div class="file-list" id="fileListDiv">
+        <h3>📚 Danh sách bài học của bạn:</h3>
+        <!-- Các file nạp vào sẽ hiện ở đây -->
+    </div>
+
+    <!-- Nội dung của bài học đang chọn -->
+    <textarea id="inputText" oninput="saveCurrentEdit()" placeholder="Nội dung bài học sẽ hiện ở đây..."></textarea>
+
+    <div class="controls">
+        <button class="btn-play" onclick="playAudio()">▶ Đọc Lặp Lại Danh Sách Này</button>
+        <button class="btn-stop" onclick="stopAudio()">⏹ Dừng Lại</button>
+    </div>
+    
+    <div id="status">Trạng thái: Đang chờ...</div>
+
+    <script>
+        let synth = window.speechSynthesis;
+        let voices = [];
+        let isPlaying = false;
+        let files = JSON.parse(localStorage.getItem('my_learning_files')) || [];
+        let currentFileId = null;
+
+        // 1. Tải bộ đọc giọng nói
+        function loadVoices() { voices = synth.getVoices(); }
+        loadVoices();
+        if (speechSynthesis.onvoiceschanged !== undefined) { speechSynthesis.onvoiceschanged = loadVoices; }
+
+        // 2. Render danh sách file ra màn hình
+        function renderList() {
+            let div = document.getElementById('fileListDiv');
+            div.innerHTML = '<h3>📚 Danh sách bài học của bạn:</h3>';
+            
+            if(files.length === 0) {
+                div.innerHTML += '<p style="color:#666; font-size:14px;">Chưa có bài học nào. Hãy tải file Excel lên nhé!</p>';
+            }
+            
+            files.forEach(f => {
+                let item = document.createElement('div');
+                item.className = 'file-item ' + (f.id === currentFileId ? 'active' : '');
+                
+                let textSpan = document.createElement('span');
+                textSpan.innerHTML = `📄 ${f.name} (${f.count} câu)`;
+                textSpan.onclick = () => selectFile(f.id);
+                
+                let delBtn = document.createElement('button');
+                delBtn.className = 'btn-del';
+                delBtn.innerText = 'Xóa';
+                delBtn.onclick = (e) => { e.stopPropagation(); deleteFile(f.id); };
+                
+                item.appendChild(textSpan);
+                item.appendChild(delBtn);
+                div.appendChild(item);
+            });
+        }
+
+        // 3. Xử lý khi tải file Excel lên
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            let file = e.target.files[0];
+            if (!file) return;
+
+            let reader = new FileReader();
+            reader.onload = function(e) {
+                let data = new Uint8Array(e.target.result);
+                let workbook = XLSX.read(data, {type: 'array'});
+                let firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                let jsonData = XLSX.utils.sheet_to_json(firstSheet, {header: 1});
+                
+                let sentences = [];
+                for (let i = 1; i < jsonData.length; i++) {
+                    let row = jsonData[i];
+                    if (row && row.length >= 2 && row[0] && row[1]) {
+                        sentences.push(row[0].toString().trim() + " | " + row[1].toString().trim());
+                    }
+                }
+
+                if(sentences.length > 0) {
+                    let newFile = {
+                        id: Date.now(), // Tạo ID duy nhất bằng mốc thời gian
+                        name: file.name.replace('.xlsx', ''),
+                        content: sentences.join('\n'),
+                        count: sentences.length
+                    };
+                    
+                    files.push(newFile);
+                    localStorage.setItem('my_learning_files', JSON.stringify(files));
+                    selectFile(newFile.id);
+                    document.getElementById('fileInput').value = ""; // Xóa input để tải được file cùng tên
+                    alert("Đã lưu bài học thành công vào bộ nhớ!");
+                } else {
+                    alert("Không tìm thấy dữ liệu hợp lệ trong file Excel!");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // 4. Chọn 1 file để đọc
+        function selectFile(id) {
+            currentFileId = id;
+            let f = files.find(x => x.id === id);
+            if(f) {
+                document.getElementById('inputText').value = f.content;
+                renderList();
+                stopAudio(); // Dừng nếu bài cũ đang phát
+            }
+        }
+
+        // 5. Xóa file
+        function deleteFile(id) {
+            if(confirm("Bạn có chắc chắn muốn xóa bài học này khỏi danh sách?")) {
+                files = files.filter(x => x.id !== id);
+                localStorage.setItem('my_learning_files', JSON.stringify(files));
+                
+                if(currentFileId === id) {
+                    currentFileId = null;
+                    document.getElementById('inputText').value = "";
+                }
+                renderList();
+            }
+        }
+
+        // 6. Lưu khi sửa văn bản thủ công
+        function saveCurrentEdit() {
+            if(!currentFileId) return;
+            let f = files.find(x => x.id === currentFileId);
+            if(f) {
+                f.content = document.getElementById('inputText').value;
+                localStorage.setItem('my_learning_files', JSON.stringify(files));
+            }
+        }
+
+        // 7. Hệ thống đọc lặp lại
+        async function playAudio() {
+            if (isPlaying) return;
+            let text = document.getElementById('inputText').value.trim();
+            if(!text) { alert("Chưa có dữ liệu để đọc!"); return; }
+
+            synth.cancel(); 
+            isPlaying = true;
+            document.getElementById('status').innerHTML = "<span style='color: green;'>Đang đọc (Sẽ lặp lại liên tục)...</span>";
+            
+            let lines = text.split('\n').filter(line => line.trim() !== '');
+
+            while (isPlaying) {
+                for (let line of lines) {
+                    if (!isPlaying) break; 
+                    let parts = line.split('|');
+                    if (parts.length >= 2) {
+                        await speakSentence(parts[0].trim(), 'vi-VN', 1.0); 
+                        if (!isPlaying) break;
+                        
+                        await speakSentence(parts[1].trim(), 'en-US', 0.85); 
+                        if (!isPlaying) break;
+
+                        await sleep(1500); 
+                    }
+                }
+                
+                if (isPlaying) {
+                    document.getElementById('status').innerHTML = "<span style='color: orange;'>Đang lặp lại vòng mới...</span>";
+                    await sleep(2500); 
+                    document.getElementById('status').innerHTML = "<span style='color: green;'>Đang đọc (Sẽ lặp lại liên tục)...</span>";
+                }
+            }
+        }
+
+        function speakSentence(text, lang, rate) {
+            return new Promise((resolve) => {
+                let utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = lang;
+                utterance.rate = rate; 
+                
+                let voice = voices.find(v => v.lang.includes(lang) || v.lang.includes(lang.replace('-', '_')));
+                if(voice) utterance.voice = voice;
+
+                utterance.onend = resolve;
+                utterance.onerror = resolve; 
+                
+                synth.speak(utterance);
+            });
+        }
+
+        function stopAudio() {
+            isPlaying = false;
+            synth.cancel();
+            document.getElementById('status').innerHTML = "<span style='color: red;'>Đã dừng!</span>";
+        }
+
+        function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+        // Khởi động giao diện lúc tải trang
+        renderList();
+        if(files.length > 0) selectFile(files[0].id);
+
+    </script>
+</body>
+</html>
